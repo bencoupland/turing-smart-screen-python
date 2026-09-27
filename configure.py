@@ -24,7 +24,6 @@
 from library.pythoncheck import check_python_version
 check_python_version()
 
-import glob
 import os
 import platform
 import subprocess
@@ -476,15 +475,23 @@ class TuringConfigWindow:
 
     def on_theme_editor_click(self):
         subprocess.Popen(
-            f'"{MAIN_DIRECTORY}{glob.glob("theme-editor.*", root_dir=MAIN_DIRECTORY)[0]}" "{self.theme_cb.get()}"',
-            shell=True)
+            [sys.executable, os.path.join(MAIN_DIRECTORY, "theme-editor.py"), self.theme_cb.get()],
+            cwd=MAIN_DIRECTORY,
+            start_new_session=True,
+        )
 
     def on_save_click(self):
         self.save_config_values()
 
     def on_saverun_click(self):
         self.save_config_values()
-        subprocess.Popen(f'"{MAIN_DIRECTORY}{glob.glob("main.*", root_dir=MAIN_DIRECTORY)[0]}"', shell=True)
+        # Launch with this same interpreter. The script's shebang asks for
+        # `python`, which is not installed, so executing main.py directly fails.
+        subprocess.Popen(
+            [sys.executable, os.path.join(MAIN_DIRECTORY, "main.py"), "--replace"],
+            cwd=MAIN_DIRECTORY,
+            start_new_session=True,
+        )
         self.window.destroy()
 
     def on_brightness_change(self, e=None):

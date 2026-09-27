@@ -69,6 +69,21 @@ This project offers an abstraction layer to manage all of these products in a un
 
 If you haven't received your screen yet but want to start developing your theme now, you can use the [**"simulated LCD" mode!**](https://github.com/mathoudebine/turing-smart-screen-python/wiki/Simulated-display)
 
+## This copy
+
+This is a privately maintained fork of [mathoudebine/turing-smart-screen-python](https://github.com/mathoudebine/turing-smart-screen-python). It is not the upstream project, and it is not software from Turing or the screen vendor. The license remains GPL-3. See `LICENSE`.
+
+On Linux, copy this folder to the computer and double-click `install.sh`, then choose Run. The installer creates a Python environment in `venv/`, adds a desktop icon and an application-menu entry that open the configuration window, and starts the monitor a few seconds after login. The tray icon appears while the monitor is running. `uninstall.sh` removes those shortcuts and stops that copy of the monitor. `pack-for-another-pc.sh` writes an archive that leaves out `venv` and Git history.
+
+`config.yaml` may name a network card and a fan from the computer where this folder was last used. On a different computer, open the desktop icon and set those for that machine.
+
+Two readings differ from the upstream program:
+
+- CPU percentage follows physical cores. Each core is the sum of its two threads, capped at 100%, and those core figures are averaged. `CPU_USAGE: cores` in `config.yaml` selects this. `logical` is the upstream average of every thread.
+- CPU frequency is the fastest logical processor at that moment. A light load shows the current boost clock. An even full load falls to the all-core clock.
+
+The upstream setup guide remains on the [wiki](https://github.com/mathoudebine/turing-smart-screen-python/wiki).
+
 ## How to start
 
 ### [> Follow instructions on the wiki to configure and start this project.](https://github.com/mathoudebine/turing-smart-screen-python/wiki)

@@ -21,7 +21,9 @@
 # This file will use Python libraries (psutil, GPUtil, etc.) to get hardware sensors
 # For all platforms (Linux, Windows, macOS) but not all HW is supported
 
+import glob
 import math
+import os
 import platform
 import sys
 from collections import namedtuple
@@ -119,18 +121,166 @@ def is_cpu_fan(label: str) -> bool:
     return ("cpu" in label.lower()) or ("proc" in label.lower())
 
 
+_CORE_GROUPS = None
+_CPU_USAGE_MODE_LOGGED = False
+_CPU_FREQ_LOGGED = False
+
+
+def _parse_cpu_list(text: str):
+    """Parse a sysfs CPU list such as '0,44' or '0-3,8'."""
+    cpus = []
+    for part in text.replace("\n", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            cpus.extend(range(int(start), int(end) + 1))
+        else:
+            cpus.append(int(part))
+    return cpus
+
+
+def physical_core_groups():
+    """Logical CPUs that share a physical core, one tuple per core.
+
+    On this machine each tuple is a hyper-thread pair, 44 pairs for 88 threads.
+    """
+    global _CORE_GROUPS
+    if _CORE_GROUPS is not None:
+        return _CORE_GROUPS
+
+    groups = []
+    seen = set()
+    paths = glob.glob("/sys/devices/system/cpu/cpu[0-9]*/topology/thread_siblings_list")
+
+    def cpu_index(path):
+        # .../cpu12/topology/thread_siblings_list
+        cpu_dir = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        return int(cpu_dir[3:])
+
+    for path in sorted(paths, key=cpu_index):
+        with open(path, "r", encoding="ascii") as handle:
+            members = tuple(sorted(set(_parse_cpu_list(handle.read()))))
+        if members and members not in seen:
+            seen.add(members)
+            groups.append(members)
+
+    _CORE_GROUPS = groups
+    return groups
+
+
+def core_utilization(per_cpu, groups) -> float:
+    """Usage across physical cores, on a 0–100 scale.
+
+    Each core contributes the sum of its threads' busy time, capped at 100.
+    One busy thread on a hyper-thread pair therefore counts as that core being
+    fully in use, and the second thread does not push the core past 100.
+    The core figures are then averaged, so all 44 cores busy reads as 100
+    rather than about 50.
+    """
+    if not per_cpu:
+        return math.nan
+    if not groups:
+        return sum(per_cpu) / float(len(per_cpu))
+
+    loads = []
+    for group in groups:
+        total = 0.0
+        counted = False
+        for index in group:
+            if 0 <= index < len(per_cpu):
+                total += per_cpu[index]
+                counted = True
+        if counted:
+            if total > 100.0:
+                total = 100.0
+            loads.append(total)
+
+    if not loads:
+        return sum(per_cpu) / float(len(per_cpu))
+    return sum(loads) / float(len(loads))
+
+
+def fastest_frequency(currents) -> float:
+    """Highest current clock in the readings, in MHz.
+
+    psutil.cpu_freq() with no per-CPU flag averages every logical processor,
+    so idle cores near the minimum clock hide a core that is boosting. The
+    highest reading is that boost bin. When every core is busy the clocks
+    settle together and this falls to the all-core clock. Zero and missing
+    readings, such as an offline CPU, are ignored.
+    """
+    valid = []
+    for value in currents:
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(value) or value <= 0.0:
+            continue
+        valid.append(value)
+    if not valid:
+        return math.nan
+    return max(valid)
+
+
+def cpu_usage_mode() -> str:
+    """config.yaml CPU_USAGE: 'cores' (physical cores) or 'logical' (every thread)."""
+    global _CPU_USAGE_MODE_LOGGED
+    mode = "logical"
+    try:
+        import library.config as config
+        raw = config.CONFIG_DATA.get("config", {}).get("CPU_USAGE", "logical")
+        mode = str(raw).strip().lower()
+    except Exception:
+        mode = "logical"
+
+    if mode in ("core", "cores", "physical"):
+        mode = "cores"
+    else:
+        mode = "logical"
+
+    if not _CPU_USAGE_MODE_LOGGED:
+        if mode == "cores":
+            logger.info(
+                "CPU usage scale: cores (%d physical cores)"
+                % (len(physical_core_groups()) or psutil.cpu_count(logical=False) or 0)
+            )
+        else:
+            logger.info("CPU usage scale: logical processors")
+        _CPU_USAGE_MODE_LOGGED = True
+    return mode
+
+
 class Cpu(sensors.Cpu):
     @staticmethod
     def percentage(interval: float) -> float:
         try:
+            if cpu_usage_mode() == "cores":
+                per_cpu = psutil.cpu_percent(interval=interval, percpu=True)
+                return core_utilization(per_cpu, physical_core_groups())
             return psutil.cpu_percent(interval=interval)
         except:
             return math.nan
 
     @staticmethod
     def frequency() -> float:
+        global _CPU_FREQ_LOGGED
         try:
-            return psutil.cpu_freq().current
+            per_cpu = psutil.cpu_freq(percpu=True)
+            if per_cpu:
+                fastest = fastest_frequency(cpu.current for cpu in per_cpu)
+                if not _CPU_FREQ_LOGGED and not math.isnan(fastest):
+                    logger.info("CPU frequency: fastest logical processor")
+                    _CPU_FREQ_LOGGED = True
+                return fastest
+            freq = psutil.cpu_freq()
+            if freq is None:
+                return math.nan
+            return freq.current
         except:
             return math.nan
 
